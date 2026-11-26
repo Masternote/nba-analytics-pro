@@ -12,7 +12,20 @@ IDS={norm(t['full_name']):t['id'] for t in teams.get_teams()}
 def tid(t): return IDS[norm(t['displayName'])]
 @st.cache_data(ttl=3600)
 def board(start,end):
-    return get('scoreboard',dates=f'{start:%Y%m%d}-{end:%Y%m%d}',limit=1000)['events']
+    if start == end:
+        return get('scoreboard', dates=f'{start:%Y%m%d}', limit=100)['events']
+    try:
+        return get('scoreboard', dates=f'{start:%Y%m%d}-{end:%Y%m%d}', limit=100)['events']
+    except requests.HTTPError as exc:
+        if exc.response is None or exc.response.status_code != 400:
+            raise
+        events = {}
+        day = start
+        while day <= end:
+            for event in board(day, day):
+                events[event['id']] = event
+            day += timedelta(days=1)
+        return list(events.values())
 
 def number(x): return float(x)
 def made_attempt(x): return float(x.split('-')[-1])

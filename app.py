@@ -42,7 +42,7 @@ def normalize(name):
     return name.lower().replace('los angeles clippers','la clippers').replace('la lakers','los angeles lakers').strip()
 
 st.set_page_config(page_title='NBA Analytics Pro',layout='wide')
-st.title('NBA Analytics Pro v4.1')
+st.title('NBA Analytics Pro v4.2')
 st.warning('Deneysel model; gerçek takım istatistikleri kullanılır ancak model henüz geçmiş maçlarla kalibre edilmemiştir. Sakatlık raporu ve oyuncu verileri ayrı gösterilir; oyuncu modeli henüz kalibre edilmemiştir.')
 mode=st.radio('Maç seçimi',['Maç takvimi','Takım seçimi'],horizontal=True)
 now=datetime.now(ZoneInfo('America/New_York'))
