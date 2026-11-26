@@ -1,3 +1,4 @@
+from espn_data import dataset, roster as espn_roster
 import streamlit as st
 from player_model import features, project, simulate_players
 from nba_api.stats.endpoints import playergamelogs
@@ -41,13 +42,13 @@ def normalize(name):
     return name.lower().replace('los angeles clippers','la clippers').replace('la lakers','los angeles lakers').strip()
 
 st.set_page_config(page_title='NBA Analytics Pro',layout='wide')
-st.title('NBA Analytics Pro v4.0')
+st.title('NBA Analytics Pro v4.1')
 st.warning('Deneysel model; gerçek takım istatistikleri kullanılır ancak model henüz geçmiş maçlarla kalibre edilmemiştir. Sakatlık raporu ve oyuncu verileri ayrı gösterilir; oyuncu modeli henüz kalibre edilmemiştir.')
 mode=st.radio('Maç seçimi',['Maç takvimi','Takım seçimi'],horizontal=True)
 now=datetime.now(ZoneInfo('America/New_York'))
 day=st.date_input('Maç tarihi (Türkiye saati)',datetime.now(ZoneInfo('Europe/Istanbul')).date())
 if st.button('Verileri yenile'):
-    schedule.clear(); ratings.clear(); st.session_state.pop('result',None)
+    schedule.clear(); ratings.clear(); dataset.clear(); st.session_state.pop('result',None)
 if mode=='Maç takvimi':
     try: games=schedule(day)
     except Exception as exc:
@@ -63,7 +64,10 @@ else:
     match_day=day-timedelta(days=1) # conservative cutoff for Turkish calendar date
 cutoff=min(match_day-timedelta(days=1),now.date()-timedelta(days=1))
 try:
-    data,season=ratings(cutoff)
+    history, raw_players = dataset(cutoff)
+    season=f'{cutoff.year if cutoff.month>=10 else cutoff.year-1}'
+    data=history.groupby(['TEAM_ID','TEAM_NAME'],as_index=False).agg(GP=('PTS','size'),pts=('PTS','sum'),opp=('PTS_opp','sum'),poss=('poss','sum'))
+    data['OFF_RATING']=100*data.pts/data.poss; data['DEF_RATING']=100*data.opp/data.poss; data['PACE']=data.poss/data.GP
     def team(name):
         rows=data[data.TEAM_NAME.map(normalize)==normalize(name)]
         if len(rows)!=1: raise ValueError(f'{name} için sezon verisi bulunamadı')
@@ -73,10 +77,10 @@ try:
     base=float(np.average(data.OFF_RATING,weights=data.GP))
 except Exception as exc:
     st.error(f'NBA istatistikleri alınamadı. Örnek veriyle simülasyon yapılmayacak. {exc}')
-    st.info('Verileri yenile ile tekrar deneyin. NBA veri servisi sunucu erişimini engelleyebilir.')
+    st.info('Verileri yenile ile tekrar deneyin. ESPN geçmiş maç verileri eksik veya erişilemez olabilir.')
     st.stop()
 try:
-    history=logs(season)
+    history=history
     prior=history[history.GAME_DATE<=pd.Timestamp(cutoff)]
     for name in [home,away]:
         tid=int(data.loc[data.TEAM_NAME.map(normalize)==normalize(name),'TEAM_ID'].iloc[0])
@@ -91,7 +95,7 @@ except Exception as exc:
     st.error(f'Form verisi alınamadı: {exc}'); st.stop()
 with st.expander('Oyuncu ve sakatlık raporu'):
     try:
-        p=players(season,cutoff)
+        p=espn_roster(raw_players)
         ids=data[data.TEAM_NAME.map(normalize).isin([normalize(home),normalize(away)])].TEAM_ID
         st.dataframe(p[p.TEAM_ID.isin(ids)][['PLAYER_NAME','TEAM_ABBREVIATION','GP','MIN','PTS','AST','REB']].sort_values('MIN',ascending=False),hide_index=True)
     except Exception as exc: st.warning(f'Oyuncu verisi yok: {exc}')
@@ -133,10 +137,10 @@ model=st.radio('Model',['A — Takım','B — Oyuncu / rakip savunması','C — 
 projections=[]
 if model[0]!='A':
     try:
-        raw=player_history(season,cutoff)
+        raw=raw_players.copy()
         raw['GAME_DATE']=pd.to_datetime(raw.GAME_DATE)
         f=features(prior,raw[raw.GAME_DATE<=pd.Timestamp(cutoff)])
-        roster=players(season,cutoff)
+        roster=espn_roster(raw_players)
         pace=(h[3]+v[3])/2
         for name, opponent in [(home,v),(away,h)]:
             tid=int(data.loc[data.TEAM_NAME.map(normalize)==normalize(name),'TEAM_ID'].iloc[0])
@@ -152,7 +156,7 @@ if model[0]!='A':
         st.error(f'Oyuncu modeli verisi alınamadı: {exc}'); st.stop()
 
 match_key=str((home,away,day,cutoff,h,v,base))+model+str([r.to_json() for r in projections])
-st.caption(f'Kaynak: NBA Stats | {season} normal sezon | ABD tarihi {cutoff} dahil. Aynı günün maçları dahil edilmez.')
+st.caption(f'Kaynak: ESPN kutu skorları (tahmini pozisyon sayısı) | {season} normal sezon | ABD tarihi {cutoff} dahil. Aynı günün maçları dahil edilmez.')
 st.dataframe(pd.DataFrame([h,v],columns=['Takım','Offensive Rating','Defensive Rating','Pace']),hide_index=True)
 st.caption(f'Lig ortalama hücum reytingi (maç ağırlıklı): {base:.2f}')
 n=st.selectbox('Simülasyon adedi',[5000,10000,25000,50000,100000],index=1)
