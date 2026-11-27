@@ -1,4 +1,5 @@
 import requests, pandas as pd, streamlit as st
+import math
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date,timedelta
 from nba_api.stats.static import teams
@@ -27,12 +28,14 @@ def board(start,end):
             day += timedelta(days=1)
         return list(events.values())
 
-def number(x): return float(x)
-def made_attempt(x): return float(x.split('-')[-1])
+def number(x):
+    if x is None or str(x).strip() in ('', '-', '--', '—', 'N/A'): return float('nan')
+    return float(x)
+def made_attempt(x): return number(str(x).split('-')[-1])
 def minutes(x):
     if ':' in str(x):
         a,b=str(x).split(':'); return float(a)+float(b)/60
-    return float(x)
+    return number(x)
 @st.cache_data(ttl=86400)
 def box(gid):
     j=get('summary',event=gid); b=j['boxscore']; rows=[]; ps=[]
@@ -48,9 +51,11 @@ def box(gid):
             for a in group['athletes']:
                 if a.get('didNotPlay') or not a.get('stats'): continue
                 s=dict(zip(labels,a['stats'])); m=minutes(s['MIN'])
-                if m<=0: continue
-                ps.append(dict(GAME_ID=str(gid),GAME_DATE=day,TEAM_ID=i,PLAYER_ID=int(a['athlete']['id']),PLAYER_NAME=a['athlete']['displayName'],MIN=m,PTS=float(s['PTS']),AST=float(s.get('AST',0)),REB=float(s.get('REB',0))))
-    if len(rows)!=2 or not ps: raise ValueError('Eksik kutu skoru')
+                if not math.isfinite(m) or m<=0: continue
+                pts=number(s['PTS'])
+                if not math.isfinite(pts): raise ValueError('Eksik oyuncu sayısı')
+                ps.append(dict(GAME_ID=str(gid),GAME_DATE=day,TEAM_ID=i,PLAYER_ID=int(a['athlete']['id']),PLAYER_NAME=a['athlete']['displayName'],MIN=m,PTS=pts,AST=number(s.get('AST')),REB=number(s.get('REB'))))
+    if len(rows)!=2 or not ps or any(not math.isfinite(r[k]) for r in rows for k in ('PTS','FGA','FTA','OREB','TOV')): raise ValueError('Eksik kutu skoru')
     return rows,ps
 @st.cache_data(ttl=1800,show_spinner=False)
 def dataset(cutoff):
@@ -64,17 +69,17 @@ def dataset(cutoff):
     rows=[]; ps=[]; errors=[]; progress=st.progress(0,text='ESPN geçmiş maçları alınıyor')
     def safe(g):
         try: return box(g)
-        except Exception as e: return str(e)
+        except Exception as e: return f"Maç {g}: {e}"
     with ThreadPoolExecutor(max_workers=6) as pool:
         for k,result in enumerate(pool.map(safe,events)):
             if isinstance(result,str): errors.append(result)
             else: rows.extend(result[0]); ps.extend(result[1])
             if k%10==0: progress.progress((k+1)/len(events),text=f'{k+1}/{len(events)} maç')
     progress.empty()
-    if errors: raise ValueError(f'{len(errors)}/{len(events)} maç verisi eksik; ilk hata: {errors[0]}')
+    if errors and (not rows or len(errors)/len(events)>0.02): raise ValueError(f'{len(errors)}/{len(events)} maç verisi eksik; ilk hata: {errors[0]}')
     d=pd.DataFrame(rows); p=pd.DataFrame(ps); d=d.merge(d[['GAME_ID','TEAM_ID','PTS','FGA','FTA','OREB','TOV']],on='GAME_ID',suffixes=('','_opp')); d=d[d.TEAM_ID!=d.TEAM_ID_opp].copy(); d['poss']=(d.FGA+.44*d.FTA-d.OREB+d.TOV+d.FGA_opp+.44*d.FTA_opp-d.OREB_opp+d.TOV_opp)/2
     d=d[(d.poss>0)&(d.GAME_DATE<=pd.Timestamp(cutoff))].sort_values('GAME_DATE'); p=p[p.GAME_DATE<=pd.Timestamp(cutoff)]
-    return d,p
+    return d,p,errors,len(events)
 
 def roster(p):
     p=p.sort_values('GAME_DATE'); latest=p.drop_duplicates('PLAYER_ID',keep='last')[['PLAYER_ID','TEAM_ID']]; p=p.merge(latest,on=['PLAYER_ID','TEAM_ID']); r=p.groupby(['TEAM_ID','PLAYER_ID','PLAYER_NAME'],as_index=False).agg(GP=('PTS','size'),MIN=('MIN','mean'),PTS=('PTS','mean'),AST=('AST','mean'),REB=('REB','mean')); r['TEAM_ABBREVIATION']=r.TEAM_ID.map({t['id']:t['abbreviation'] for t in teams.get_teams()}); return r

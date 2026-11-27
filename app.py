@@ -42,7 +42,7 @@ def normalize(name):
     return name.lower().replace('los angeles clippers','la clippers').replace('la lakers','los angeles lakers').strip()
 
 st.set_page_config(page_title='NBA Analytics Pro',layout='wide')
-st.title('NBA Analytics Pro v4.2')
+st.title('NBA Analytics Pro v4.3')
 st.warning('Deneysel model; gerçek takım istatistikleri kullanılır ancak model henüz geçmiş maçlarla kalibre edilmemiştir. Sakatlık raporu ve oyuncu verileri ayrı gösterilir; oyuncu modeli henüz kalibre edilmemiştir.')
 mode=st.radio('Maç seçimi',['Maç takvimi','Takım seçimi'],horizontal=True)
 now=datetime.now(ZoneInfo('America/New_York'))
@@ -64,7 +64,11 @@ else:
     match_day=day-timedelta(days=1) # conservative cutoff for Turkish calendar date
 cutoff=min(match_day-timedelta(days=1),now.date()-timedelta(days=1))
 try:
-    history, raw_players = dataset(cutoff)
+    history, raw_players, missing, total_games = dataset(cutoff)
+    if missing:
+        st.warning(f"{len(missing)}/{total_games} maç eksik; tahmin mevcut maçlarla hesaplanıyor. Sonuçlar eksik veri içerir.")
+        with st.expander("Eksik maç ayrıntıları"):
+            st.write(missing)
     season=f'{cutoff.year if cutoff.month>=10 else cutoff.year-1}'
     data=history.groupby(['TEAM_ID','TEAM_NAME'],as_index=False).agg(GP=('PTS','size'),pts=('PTS','sum'),opp=('PTS_opp','sum'),poss=('poss','sum'))
     data['OFF_RATING']=100*data.pts/data.poss; data['DEF_RATING']=100*data.opp/data.poss; data['PACE']=data.poss/data.GP
